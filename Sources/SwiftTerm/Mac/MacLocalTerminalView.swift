@@ -9,6 +9,8 @@
 import Foundation
 import AppKit
 
+/// Delegate for the ``LocalProcessTerminalView`` class that is used to
+/// notify the user of process-related changes.
 public protocol LocalProcessTerminalViewDelegate: AnyObject {
     /**
      * This method is invoked to notify that the terminal has been resized to the specified number of columns and rows
@@ -57,9 +59,13 @@ public protocol LocalProcessTerminalViewDelegate: AnyObject {
  * consumer applications are reposted to the `LocalProcessTerminalViewDelegate` in
  * `processDelegate`.   If you override the `delegate` directly, you might inadvertently break
  * the internal working of `LocalProcessTerminalView`.   If you must change the `delegate`
- * make sure that you proxy the values in your implementation to the values set after initializing this instance
+ * make sure that you proxy the values in your implementation to the values set after initializing this instance.
+ *
+ * If you want additional control over the delegate methods implemented in this class, you can
+ * subclass this and override the methods
  */
-public class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDelegate {
+open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDelegate {
+    
     var process: LocalProcess!
     
     public override init (frame: CGRect)
@@ -106,7 +112,6 @@ public class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, Local
         }
     }
     
-
     /**
      * Invoke this method to notify the processDelegate of the new title for the terminal window
      */
@@ -121,8 +126,9 @@ public class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, Local
 
     /**
      * This method is invoked when input from the user needs to be sent to the client
+     * Implementation of the TerminalViewDelegate method
      */
-    public func send(source: TerminalView, data: ArraySlice<UInt8>) 
+    open func send(source: TerminalView, data: ArraySlice<UInt8>)
     {
         process.send (data: data)
     }
@@ -135,10 +141,15 @@ public class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, Local
         process.setHostLogging (directory: directory)
     }
     
-    public func scrolled(source: TerminalView, position: Double) {
+    /// Implementation of the TerminalViewDelegate method
+    open func scrolled(source: TerminalView, position: Double) {
         // noting
     }
 
+    open func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
+        //
+    }
+    
     /**
      * Launches a child process inside a pseudo-terminal.
      * - Parameter executable: The executable to launch inside the pseudo terminal, defaults to /bin/bash
@@ -154,21 +165,21 @@ public class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, Local
     /**
      * Implements the LocalProcessDelegate method.
      */
-    public func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
+    open func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
         processDelegate?.processTerminated(source: self, exitCode: exitCode)
     }
     
     /**
      * Implements the LocalProcessDelegate.dataReceived method
      */
-    public func dataReceived(slice: ArraySlice<UInt8>) {
+    open func dataReceived(slice: ArraySlice<UInt8>) {
         feed (byteArray: slice)
     }
     
     /**
      * Implements the LocalProcessDelegate.getWindowSize method
      */
-    public func getWindowSize () -> winsize
+    open func getWindowSize () -> winsize
     {
         let f: CGRect = self.frame
         return winsize(ws_row: UInt16(terminal.rows), ws_col: UInt16(terminal.cols), ws_xpixel: UInt16 (f.width), ws_ypixel: UInt16 (f.height))

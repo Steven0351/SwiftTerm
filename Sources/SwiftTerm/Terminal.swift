@@ -274,7 +274,10 @@ open class Terminal {
     /// The current terminal rows (counting from 1)
     public private(set) var rows: Int = 25
     var tabStopWidth : Int = 8
-    var options: TerminalOptions
+    
+    /// Terminal configuration options.
+    /// Setup(isReset:) method should be called to apply changes
+    public var options: TerminalOptions
     
     // The current buffers
     var buffers : BufferSet!
@@ -603,7 +606,7 @@ open class Terminal {
         return getCharData(col: col, row: row)?.getCharacter()
     }
     
-    func setup (isReset: Bool = false)
+    public func setup (isReset: Bool = false)
     {
         // Sadly a duplicate of much of what lives in init() due to Swift not allowing me to
         // call this
@@ -804,7 +807,7 @@ open class Terminal {
         parser.executeHandlers [0x88] = {  [unowned self] in cmdTabSet () }
 
         //
-        // OSC handler
+        // OSC handler - ESC ]
         //
         //   0 - icon name + title
         parser.oscHandlers [0] = { [unowned self] data in self.setTitle(text: String (bytes: data, encoding: .utf8) ?? "")}
@@ -827,11 +830,11 @@ open class Terminal {
         
         parser.oscHandlers [8] = { [unowned self] data in oscHyperlink (data) }
         //  10 - Change VT100 text foreground color to Pt.
-        parser.oscHandlers [10] = { [unowned self] data in oscSetTextForeground (data) }
+        parser.oscHandlers [10] = { [unowned self] data in oscSetColors (data, startAt: 0) }
         //  11 - Change VT100 text background color to Pt.
-        parser.oscHandlers [11] = { [unowned self] data in oscSetTextBackground (data) }
+        parser.oscHandlers [11] = { [unowned self] data in oscSetColors (data, startAt: 1) }
         //  12 - Change text cursor color to Pt.
-        parser.oscHandlers [12] = { [unowned self] data in oscSetCursorColor (data) }
+        parser.oscHandlers [12] = { [unowned self] data in oscSetColors (data, startAt: 2) }
         
         //  13 - Change mouse foreground color to Pt.
         //  14 - Change mouse background color to Pt.
@@ -883,6 +886,7 @@ open class Terminal {
         parser.setEscHandler ("%G", { [unowned self] collect, flag in self.cmdSelectDefaultCharset () })
         parser.setEscHandler ("#3", { [unowned self] collect, flag in self.cmdSetDoubleHeightTop() })
         parser.setEscHandler ("#4", { [unowned self] collect, flag in self.cmdSetDoubleHeightBottom() })
+        parser.setEscHandler ("#5", { [unowned self] collect, flag in self.cmdSingleWidthSingleHeight() })
         parser.setEscHandler ("#6", { [unowned self] collect, flag in self.cmdDoubleWidthSingleHeight () })
         parser.setEscHandler ("#8", { [unowned self] collect, flag in self.cmdScreenAlignmentPattern () })
         parser.setEscHandler (" G") { [unowned self] collect, flag in self.cmdSet8BitControls () }
@@ -1135,8 +1139,10 @@ open class Terminal {
             //if screenReaderMode {
             //    emitChar (ch)
             //}
-            let charData = CharData (attribute: curAttr, char: ch, size: Int8 (chWidth))
-            insertCharacter (charData)
+            if ch != "\u{200d}" {
+                let charData = CharData (attribute: curAttr, char: ch, size: Int8 (chWidth))
+                insertCharacter (charData)
+            } 
         }
         updateRange (buffer.y)
         readingBuffer.done ()
@@ -1535,11 +1541,11 @@ open class Terminal {
             }
             let kv = parseKeyValues (data [equalIdx+1..<colonIdx])
             // inline == 1 means to display the image inline, the option == 0 downloads the provided file
-            // into the file system, and I do not think it is a good idea to download data from untrusted
-            // sources like this and potentially override existing files.   So let us just not bother
-            // supporting that
+            // into the file system.   In that case, we let the
+            // user of the library handle this via the iTermContent
+            // delegate
             if kv["inline"] != "1" {
-                return
+                break
             }
             
             guard let imgData = Data(base64Encoded: Data(data [colonIdx+1..<data.endIndex])) else {
@@ -1549,6 +1555,7 @@ open class Terminal {
             let height = parseDimension (kv, key: "height")
 
             tdel?.createImage(source: self, data: imgData, width: width, height: height, preserveAspectRatio: (kv ["preserveAspectRatio"] ?? "1" ) == "1")
+            return
         default:
             break
         }
@@ -1603,10 +1610,14 @@ open class Terminal {
     // This handles both setting the foreground, but spill into background and cursor color
     // if more parameters are provided (ie, sending OSC 10 with #ffffff,#000000,#ff0000
     // sets the foreground to #ffffff, background to #000000 and cursor to ff0000
-    func oscSetTextForeground (_ data: ArraySlice<UInt8>)
+    //
+    // - Parameter startAt: describes which of the colors is the first to try,
+    // startAt = 0 is foreground, startAt = 1 is background, startAt = 2 is
+    // the cursor Color
+    func oscSetColors (_ data: ArraySlice<UInt8>, startAt: Int)
     {
         let groups = data.split(separator: UInt8 (ascii: ";"))
-        var next = 0
+        var next = startAt
         while next < groups.count {
             defer { next += 1 }
             let text = groups [next]
@@ -1617,6 +1628,8 @@ open class Terminal {
                     reportColor (oscCode: 10, color: foregroundColor)
                 case 1:
                     reportColor (oscCode: 11, color: backgroundColor)
+                case 2:
+                    reportColor (oscCode: 11, color: cursorColor ?? foregroundColor)
                 default:
                     break
                 }
@@ -2957,7 +2970,11 @@ open class Terminal {
         case [36]:
             cmdDecRqm (pars, decMode: false);
         default:
-            log ("Unhandled CSI \(String (cString: collect)) with pars=\(pars)")
+            var r = ""
+            for x in collect {
+                r.append ("\(x)")
+            }
+            log ("Unhandled CSI \(r) with pars=\(pars)")
         }
     }
     
@@ -4060,7 +4077,7 @@ open class Terminal {
         if buffer.x > cols {
             return
         }
-        let p = max (pars.count == 0 ? 1 : pars [0], 1)
+        let p = min (buffer.cols, max (pars.count == 0 ? 1 : pars [0], 1))
 
         for _ in 0..<p {
             buffer.x = buffer.previousTabStop ()
@@ -4120,7 +4137,7 @@ open class Terminal {
     //
     func cmdScrollUp (_ pars: [Int], _ collect: cstring)
     {
-        let p = max (pars.count == 0 ? 1 : pars [0], 1)
+        let p = min (rows*2, max (pars.count == 0 ? 1 : pars [0], 1))
         let da = CharData.defaultAttr
 
         if marginMode {
@@ -4672,7 +4689,9 @@ open class Terminal {
             // scrollback, instead we can just shift them in-place.
             let scrollRegionHeight = bottomRow - topRow + 1 /*as it's zero-based*/
             if scrollRegionHeight > 1 {
-                buffer.lines.shiftElements (start: topRow + 1, count: scrollRegionHeight - 1, offset: -1)
+                if !buffer.lines.shiftElements (start: topRow + 1, count: scrollRegionHeight - 1, offset: -1) {
+                    print ("Assertion on scroll, state was: bottomRow=\(bottomRow) topRow=\(topRow) yDisp=\(buffer.yDisp) linesTop=\(buffer.linesTop) isAlternate=\(buffers.isAlternateBuffer)")
+                }
             }
             buffer.lines [bottomRow] = BufferLine (from: newLine)
         }
@@ -4974,13 +4993,16 @@ open class Terminal {
 
     func reverseIndex ()
     {
+        let buffer = self.buffer
         restrictCursor()
         if buffer.y == buffer.scrollTop {
             // possibly move the code below to term.reverseScroll()
             // test: echo -ne '\e[1;1H\e[44m\eM\e[0m'
             // blankLine(true) is xterm/linux behavior
             let scrollRegionHeight = buffer.scrollBottom - buffer.scrollTop
-            buffer.lines.shiftElements (start: buffer.y + buffer.yBase, count: scrollRegionHeight, offset: 1)
+            if !buffer.lines.shiftElements (start: buffer.y + buffer.yBase, count: scrollRegionHeight, offset: 1) {
+                print ("Assertion on reverseIndex, state was: y=\(buffer.y) scrollTop=\(buffer.scrollTop)  yDisp=\(buffer.yDisp) linesTop=\(buffer.linesTop) isAlternate=\(buffers.isAlternateBuffer)")
+            }
             buffer.lines [buffer.y + buffer.yBase] = buffer.getBlankLine (attribute: eraseAttr ())
             updateRange (startLine: buffer.scrollTop, endLine: buffer.scrollBottom)
         } else if buffer.y > 0 {

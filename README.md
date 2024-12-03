@@ -1,3 +1,4 @@
+[![Swift](https://github.com/migueldeicaza/SwiftTerm/actions/workflows/swift.yml/badge.svg)](https://github.com/migueldeicaza/SwiftTerm/actions/workflows/swift.yml)
 
 
 SwiftTerm
@@ -5,9 +6,11 @@ SwiftTerm
 
 SwiftTerm is a VT100/Xterm terminal emulator library for Swift applications that can be 
 embedded into macOS, iOS applications, text-based, headless applications or other 
-custom scenarios.
+custom scenarios. It has been used in several commercially available SSH clients, including 
+[Secure Shellfish](https://apps.apple.com/us/app/secure-shellfish-ssh-files/id1336634154), 
+ [La Terminal](https://apps.apple.com/us/app/la-terminal-ssh-client/id1629902861) and [CodeEdit](https://github.com/CodeEditApp/CodeEdit)
 
-Check the [API Documentation](https://migueldeicaza.github.io/SwiftTerm/)
+Check the [API Documentation](https://migueldeicaza.github.io/SwiftTermDocs/documentation/swiftterm/)
 
 This repository contains both a terminal emulator engine that is UI agnostic, as well as
 front-ends for this engine for iOS using UIKit, and macOS using AppKit.   A curses-based
@@ -22,16 +25,18 @@ use the library inside the `TerminalApp` directory.
 on iOS to run), and the sample happens to be hardcoded to my home machine, you can change that in the source
 code. 
 
-**Companion App** [SwiftTermApp](https://github.com/migueldeicaza/SwiftTermApp) builds 
-an actual iOS app that uses this library and is more complete than the testing apps in
-this module and provides a proper configuration UI.
+**Companion App** [SwiftTermApp](https://github.com/migueldeicaza/SwiftTermApp)
+builds an actual iOS app that uses this library and is more complete than the
+testing apps in this module and provides a proper configuration UI.
 
 
-This is a port of my original [XtermSharp](https://github.com/migueldeicaza/XtermSharp), which was
-itself based on [xterm.js](https://xtermjs.org).  At this point, I consider SwiftTerm
-to be a more advanced terminal emulator than both of those (modulo Selection/Accessibility) as
-it handles UTF, Unicode and grapheme clusters better than those and has a more complete coverage of 
-terminal emulation.   XtermSharp is generally attempting to keep up.
+This is a port of my original
+[XtermSharp](https://github.com/migueldeicaza/XtermSharp), which was itself
+based on [xterm.js](https://xtermjs.org).  At this point, I consider SwiftTerm
+to be a more advanced terminal emulator than both of those (modulo
+Selection/Accessibility) as it handles UTF, Unicode and grapheme clusters better
+than those and has a more complete coverage of terminal emulation.   XtermSharp
+is generally attempting to keep up.
 
 Features
 ========
@@ -44,7 +49,7 @@ Features
 * Supports mouse events
 * Supports terminal resizing operations (controlled by remote host, or locally)
 * [Hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) in terminal output
-* AppKit, UIKit front-ends;  ncruses front-end [provided separately](https://github.com/migueldeicaza/TermKit)
+* AppKit, UIKit front-ends; ncurses front-end [provided separately](https://github.com/migueldeicaza/TermKit)
 * Local process and SSH connection support (some assembly required for the last one)
 * Proper CoreText rendering can munch through the hardened Unicode test suites.
 * Sixel graphics (Use img2sixel to test)
@@ -69,18 +74,18 @@ add the library to your project by using the url for this project or a
 fork of it.
 
 ## MacOS NSView 
-The macOS AppKit NSView implementation [`TerminalView`](https://migueldeicaza.github.io/SwiftTerm/Classes/TerminalView.html) is a reusable
+The macOS AppKit NSView implementation [`TerminalView`](https://migueldeicaza.github.io/SwiftTermDocs/documentation/swiftterm/terminalview) is a reusable
 NSView control that can be connected to any source by implementing the
-[`TerminalViewDelegate`](https://migueldeicaza.github.io/SwiftTerm/Protocols/TerminalViewDelegate.html).  
+[`TerminalViewDelegate`](https://migueldeicaza.github.io/SwiftTermDocs/documentation/swiftterm/terminalviewdelegate).  
 I anticipate that a common scenario will be
 to host a local Unix command, so I have included
-[`LocalProcessTerminalView`](https://migueldeicaza.github.io/SwiftTerm/Classes/LocalProcessTerminalView.html)
+[`LocalProcessTerminalView`](https://migueldeicaza.github.io/SwiftTermDocs/documentation/swiftterm/localprocessterminalview)
  which is an implementation that connects
 the `TerminalView` to a Unix pseudo-terminal and runs a command there.
 
 ## iOS UIView
 There is an equivalent UIKit UIView implementation for
-[`TerminalView`](https://github.com/migueldeicaza/SwiftTerm/blob/main/Sources/SwiftTerm/iOS/iOSTerminalView.swift)
+[`TerminalView`](https://migueldeicaza.github.io/SwiftTermDocs/documentation/swiftterm/terminalview)
 which like its NSView companion is an embeddable and reusable view
 that can be connected to your application by implementing the same
 TerminalViewDelegate.  Unlike the NSView case running on a Mac, where
@@ -132,8 +137,8 @@ GitHub issues has a list of desired features and enhancements
 Long Term Plans
 ===============
 
-In the longer term, I want to also add a tvOS UIView, a [SwiftGtk](https://github.com/rhx/SwiftGtk) 
-front-end for Linux.
+In the longer term, I want to also add a tvOS UIView, a
+[SwiftGtk](https://github.com/rhx/SwiftGtk) front-end for Linux.
 
 Screenshots
 ===========
@@ -169,6 +174,7 @@ Sixel support:
 Resources 
 ========= 
 
+* [Digital's VT100 User Guide](https://geoffg.net/Downloads/Terminal/VT100_User_Guide.pdf)
 * [Terminal Guide](https://terminalguide.namepad.de) - very nice and visual, but not normative
 * [Xterm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking)
 * [VT510 Video Terminal Programmer Information](https://vt100.net/docs/vt510-rm/contents.html])
@@ -193,7 +199,3 @@ that was licensed under a license that allowed for maximum reuse.
 Mac
 * [Anders Borum](https://github.com/palmin) has contributed reliability fixes, the sixel parser and changes required to put SwiftTerm to use in production.
 * [Miguel de Icaza](https://tirania.org/) -me- who have been looking for an excuse to write some Swift code.
-
-This build is broken until GitHub installs the new Xcode:
-
-![Swift](https://github.com/migueldeicaza/SwiftTerm/workflows/Swift/badge.svg)

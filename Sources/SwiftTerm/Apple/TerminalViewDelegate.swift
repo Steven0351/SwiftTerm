@@ -4,9 +4,11 @@
 //
 //  Created by Miguel de Icaza on 4/15/20.
 //
-#if os(iOS) || os(macOS)
+#if os(iOS) || os(visionOS) || os(macOS)
 import Foundation
 
+/// Delegate used by ``TerminalView`` to notify the user of events happening
+/// in it.
 public protocol TerminalViewDelegate: AnyObject {
     /**
      * The client code sending commands to the terminal has requested a new size for the terminal
@@ -68,5 +70,20 @@ public protocol TerminalViewDelegate: AnyObject {
      * The default implementation does nothing.
      */
     func clipboardCopy(source: TerminalView, content: Data)
+    
+    /**
+     * This method is invoked when the client application (iTerm2) has issued a OSC 1337 and
+     * SwiftTerm did not handle a handler for it.
+     *
+     * The default implementaiton does nothing.
+     */
+    func iTermContent (source: TerminalView, content: ArraySlice<UInt8>)
+    
+    /**
+     * This method is invoked when there are visual changes in the terminal buffer if
+     * the `notifyUpdateChanges` variable is set to true.
+     */
+    func rangeChanged (source: TerminalView, startY: Int, endY: Int)
+
 }
 #endif

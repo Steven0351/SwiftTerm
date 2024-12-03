@@ -11,7 +11,7 @@
 //  Created by Miguel de Icaza on 3/4/20.
 //
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 import Foundation
 import UIKit
 import CoreText
@@ -22,13 +22,17 @@ import os
 internal var log: Logger = Logger(subsystem: "org.tirania.SwiftTerm", category: "msg")
 
 /**
- * TerminalView provides an UIKit front-end to the `Terminal` termininal emulator.
+ * TerminalView provides an AppKit/UIKit front-end to the `Terminal` terminal emulator.
  * It is up to a subclass to either wire the terminal emulator to a remote terminal
  * via some socket, to an application that wants to run with terminal emulation, or
  * wiring this up to a pseudo-terminal.
  *
  * Users are notified of interesting events in their implementation of the `TerminalViewDelegate`
  * methods - an instance must be provided to the constructor of `TerminalView`.
+ *
+ * Developers might want to surface UIs for `optionAsMetaKey` which defaults to
+ * true.  This means that Option-Letter is hijacked for terminal purposes
+ * to send the sequence ESC-Letter.   Users can toggle this with command-option-o
  *
  * Call the `getTerminal` method to get a reference to the underlying `Terminal` that backs this
  * view.
@@ -113,12 +117,35 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
      */
     public var allowMouseReporting: Bool = true
     
+    /**
+     * If set, this turns Option-letter keystrokes into an escape + keystroke combination
+     * which is convenient when you are an Emacs user for example.   But this means that
+     * international input using the option key is not easy to enter.
+     */
+    public var optionAsMetaKey = true
+    
+    /**
+     * If set to true, this will call the TerminalViewDelegate's rangeChanged method
+     * when there are changes that are being performed on the UI
+     */
+    public var notifyUpdateChanges = false
+
+    /// If true, the caret view will show different shapes depending on the focus
+    /// otherwise, it will behave like it is focused
+    public var caretViewTracksFocus: Bool {
+        get {
+            return caretView?.tracksFocus ?? false
+        }
+        set {
+            caretView?.tracksFocus = newValue
+        }
+    }
     var accessibility: AccessibilityService = AccessibilityService()
     var search: SearchService!
     var debug: UIView?
     var pendingDisplay: Bool = false
     var cellDimension: CellDimension!
-    var caretView: CaretView!
+    var caretView: CaretView?
     var terminal: Terminal!
     
     var selection: SelectionService!
@@ -325,6 +352,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         menuController.showMenu(from: self, rect: forRegion)
     }
     
+    // This is a position relative to the buffer
     var lastLongSelect: Position?
     var lastLongSelectRegion = CGRect.zero
     
@@ -346,7 +374,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     @objc func longPress (_ gestureRecognizer: UILongPressGestureRecognizer)
     {
          if gestureRecognizer.state == .began {
-             self.becomeFirstResponder()
+             let _ = self.becomeFirstResponder()
              let tapLocation = gestureRecognizer.location(in: gestureRecognizer.view)
              let tapRegion = makeContextMenuRegionForTap (point: tapLocation)
              
@@ -358,7 +386,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// This controls whether the backspace should send ^? or ^H, the default is ^?
     public var backspaceSendsControlH: Bool = false
     
-    // Returns a buffer-relative position, instead of a screen position.
+    /// Returns a buffer-relative position, instead of a screen position.
+    /// - Parameters:
+    ///   - gesture: the location of where the event took place
+    /// - Returns: both the position where the event took place (either in screen resolution, or buffer relative) and the pixel position to construct the menu location
     func calculateTapHit (gesture: UIGestureRecognizer) -> (grid: Position, pixels: Position)
     {
         func toInt (_ p: CGPoint) -> Position {
@@ -374,8 +405,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         if row < 0 {
             return (Position(col: 0, row: 0), toInt (point))
         }
-        
-        return (Position(col: min (max (0, col), terminal.cols-1), row: min (row, terminal.rows-1)), toInt (point))
+        return (Position(col: min (max (0, col), terminal.cols-1), row: row), toInt (point))
     }
 
     func encodeFlags (release: Bool) -> Int
@@ -404,6 +434,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let bottomVisibleLine = (topVisibleLine+frame.height/cellDimension.height)-1
 
         return Int(topVisibleLine)...Int(bottomVisibleLine)
+    }
+    
+    public func repositionVisibleFrame () {
+        let topVisibleLine = contentOffset.y/cellDimension.height
+        let bottomVisibleLine = (topVisibleLine+frame.height/cellDimension.height)-1
+        let lines = self.terminal.buffer.lines.count
+        contentOffset.y = max(0, CGFloat(lines) - bottomVisibleLine) * cellDimension.height
     }
     
     @objc func singleTap (_ gestureRecognizer: UITapGestureRecognizer)
@@ -439,7 +476,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             }
             queuePendingDisplay()
         } else {
-            becomeFirstResponder ()
+            let _ = becomeFirstResponder ()
         }
     }
     
@@ -711,12 +748,21 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// You can set this property to a UIView to be your input accessory, by default
     /// this is an instance of `TerminalAccessory`
     ///
+    #if os(visionOS)
+    public var inputAccessoryView: UIView? {
+        get { _inputAccessory }
+        set {
+            _inputAccessory = newValue
+        }
+    }
+    #else
     public override var inputAccessoryView: UIView? {
         get { _inputAccessory }
         set {
             _inputAccessory = newValue
         }
     }
+    #endif
 
     ///
     /// You can set this property to a UIView to be your input accessory, by default
@@ -741,9 +787,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let short = UIDevice.current.userInterfaceIdiom == .phone
         let ta = TerminalAccessory(frame: CGRect(x: 0, y: 0, width: frame.width, height: short ? 36 : 48),
                                    inputViewStyle: .keyboard, container: self)
+        #if !os(visionOS)
+        inputAssistantItem.leadingBarButtonGroups = []
+        inputAssistantItem.trailingBarButtonGroups = []
+        #endif
         ta.sizeToFit()
         inputAccessoryView = ta
-
+        
         //inputAccessoryView?.autAoresizingMask = .flexibleHeight
     }
     
@@ -791,10 +841,20 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     /// Controls the color for the caret
     public var caretColor: UIColor {
-        get { caretView.caretColor }
-        set { caretView.caretColor = newValue }
+        get { caretView?.caretColor ?? UIColor.black }
+        set { caretView?.caretColor = newValue }
     }
     
+    /// Controls the color for the text in the caret when using a block cursor, if not set
+    /// the cursor will render with the foreground color
+    public var caretTextColor: UIColor? {
+        get { caretView?.caretTextColor }
+        set { caretView?.caretTextColor = newValue }
+    }
+    
+    /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
+    public var useBrightColors: Bool = true
+
     var _selectedTextBackgroundColor = UIColor (red: 204.0/255.0, green: 221.0/255.0, blue: 237.0/255.0, alpha: 1.0)
     /// The color used to render the selection
     public var selectedTextBackgroundColor: UIColor {
@@ -925,7 +985,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     func backingScaleFactor () -> CGFloat
     {
+        #if os(visionOS)
+        1.0
+        #else
         UIScreen.main.scale
+        #endif
     }
     
     override public func draw (_ dirtyRect: CGRect) {
@@ -934,14 +998,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
 
         // Without these two lines, on font changes, some junk is being displayed
+        // Once we test the font change, we could disable these two lines, and
+        // enable the #if false in drawterminalContents that should be coping with this now
         nativeBackgroundColor.set ()
-        context.clear(dirtyRect)
+        context.fill ([dirtyRect])
 
         // drawTerminalContents and CoreText expect the AppKit coordinate system
         context.scaleBy (x: 1, y: -1)
         context.translateBy(x: 0, y: -frame.height)
 
-        drawTerminalContents (dirtyRect: dirtyRect, context: context, offset: 0, bufferOffset: 0)
+        drawTerminalContents (dirtyRect: dirtyRect, context: context, bufferOffset: 0)
     }
     
     open override var bounds: CGRect {
@@ -1081,11 +1147,21 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             break
         }
     }
+ 
+    open override func becomeFirstResponder() -> Bool {
+        let response = super.becomeFirstResponder()
+        if response {
+            caretView?.updateCursorStyle()
+        }
+        return response
+    }
     
     open override func resignFirstResponder() -> Bool {
         let code = super.resignFirstResponder()
         
         if code {
+            caretView?.disableAnimations()
+            caretView?.updateView()
             keyRepeat?.invalidate()
             keyRepeat = nil
             
@@ -1135,9 +1211,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             case .keyboardDownArrow:
                 data = .bytes (terminal.applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal)
             case .keyboardLeftArrow:
-                data = .bytes (terminal.applicationCursor ? EscapeSequences.moveLeftApp : EscapeSequences.moveLeftNormal)
+                if key.modifierFlags.contains ([.alternate]) {
+                    data = .bytes (EscapeSequences.emacsBack)
+                } else {
+                    data = .bytes (terminal.applicationCursor ? EscapeSequences.moveLeftApp : EscapeSequences.moveLeftNormal)
+                }
             case .keyboardRightArrow:
-                data = .bytes (terminal.applicationCursor ? EscapeSequences.moveRightApp : EscapeSequences.moveRightNormal)
+                if key.modifierFlags.contains ([.alternate]) {
+                    data = .bytes (EscapeSequences.emacsForward)
+                } else {
+                    data = .bytes (terminal.applicationCursor ? EscapeSequences.moveRightApp : EscapeSequences.moveRightNormal)
+                }
             case .keyboardPageUp:
                 if terminal.applicationCursor {
                     data = .bytes (EscapeSequences.cmdPageUp)
@@ -1205,7 +1289,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 break
                 
             default:
-                if key.modifierFlags.contains (.alternate) {
+                if key.modifierFlags.contains ([.alternate, .command]) && key.charactersIgnoringModifiers == "o" {
+                    optionAsMetaKey.toggle()
+                } else if key.modifierFlags.contains (.alternate) && optionAsMetaKey {
                     data = .text("\u{1b}\(key.charactersIgnoringModifiers)")
                 } else if !key.modifierFlags.contains (.command){
                     if key.characters.count > 0 {
@@ -1261,17 +1347,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     open func showCursor(source: Terminal) {
+        guard let caretView else { return }
         if caretView.superview == nil {
             addSubview(caretView)
         }
     }
 
     open func hideCursor(source: Terminal) {
-        caretView.removeFromSuperview()
+        caretView?.removeFromSuperview()
     }
     
     open func cursorStyleChanged (source: Terminal, newStyle: CursorStyle) {
-        caretView.style = newStyle
+        caretView?.style = newStyle
         updateCaretView()
     }
 
@@ -1337,6 +1424,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     public func clipboardCopy(source: Terminal, content: Data) {
         terminalDelegate?.clipboardCopy(source: self, content: content)
     }
+
+    public func iTermContent (source: Terminal, content: ArraySlice<UInt8>) {
+        terminalDelegate?.iTermContent(source: self, content: content)
+    }
 }
 
 // Default implementations for TerminalViewDelegate
@@ -1344,9 +1435,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 extension TerminalViewDelegate {    
     public func bell (source: TerminalView)
     {
+        #if os(iOS)
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.warning)
-    }    
+        #endif
+    }
+    
+    public func iTermContent (source: TerminalView, content: ArraySlice<UInt8>) {
+    }
 }
 
 #endif

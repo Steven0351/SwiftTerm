@@ -1,4 +1,4 @@
-// swift-tools-version:5.1
+// swift-tools-version:5.9
 
 import PackageDescription
 
@@ -6,7 +6,9 @@ let package = Package(
     name: "SwiftTerm",
     platforms: [
         .iOS(.v13),
-        .macOS(.v10_15)
+        .macOS(.v10_15),
+        .tvOS(.v13),
+        .visionOS(.v1)
     ],
     products: [
         .executable(name: "SwiftTermFuzz", targets: ["SwiftTermFuzz"]),
@@ -23,7 +25,7 @@ let package = Package(
             dependencies: [],
             path: "Sources/SwiftTerm"
         ),
-        .target (
+        .executableTarget (
             name: "SwiftTermFuzz",
             dependencies: ["SwiftTerm"],
             path: "Sources/SwiftTermFuzz"
@@ -38,5 +40,6 @@ let package = Package(
             dependencies: ["SwiftTerm"],
             path: "Tests/SwiftTermTests"
         )
-    ]
+    ],
+    swiftLanguageVersions: [.v5]
 )

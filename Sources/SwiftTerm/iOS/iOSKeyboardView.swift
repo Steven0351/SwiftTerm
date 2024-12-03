@@ -4,17 +4,17 @@
 //
 //  Created by Miguel de Icaza on 7/15/21.
 //
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 import Foundation
 import UIKit
 
 class KeyboardView: UIView {
-    weak var terminalView: TerminalView!
+    weak var terminalView: TerminalView?
     let small = ["1234567890",
                  "[]{}<>&ihp",
                  "+-*=%`\\deP"]
 
-    public init (frame: CGRect, terminalView: TerminalView) {
+    public init (frame: CGRect, terminalView: TerminalView?) {
         self.terminalView = terminalView
         super.init (frame: frame)
         buildUI ()
@@ -22,8 +22,10 @@ class KeyboardView: UIView {
     
     func clickAndSend (_ data: [UInt8])
     {
+        #if os(iOS)
         UIDevice.current.playInputClick()
-        terminalView.send (data)
+        #endif
+        terminalView?.send (data)
     }
 
     @objc func f1 (_ sender: AnyObject) { clickAndSend (EscapeSequences.cmdF[0]) }
@@ -44,8 +46,8 @@ class KeyboardView: UIView {
     @objc func biggerthan (_sender: AnyObject) { clickAndSend ([UInt8 (ascii: ">")]) }
     @objc func amp (_sender: AnyObject) { clickAndSend ([UInt8 (ascii: "&")]) }
     @objc func insert (_sender: AnyObject) { clickAndSend (EscapeSequences.cmdInsert) }
-    @objc func home (_sender: AnyObject) { clickAndSend (terminalView.terminal.applicationCursor ? EscapeSequences.moveHomeApp : EscapeSequences.moveHomeNormal) }
-    @objc func end (_sender: AnyObject) { clickAndSend (terminalView.terminal.applicationCursor ? EscapeSequences.moveEndApp : EscapeSequences.moveEndNormal) }
+    @objc func home (_sender: AnyObject) { clickAndSend ((terminalView?.terminal.applicationCursor ?? false) ? EscapeSequences.moveHomeApp : EscapeSequences.moveHomeNormal) }
+    @objc func end (_sender: AnyObject) { clickAndSend ((terminalView?.terminal.applicationCursor ?? false) ? EscapeSequences.moveEndApp : EscapeSequences.moveEndNormal) }
     @objc func pageUp (_sender: AnyObject) { clickAndSend (EscapeSequences.cmdPageUp) }
     @objc func pageDown (_sender: AnyObject) { clickAndSend (EscapeSequences.cmdPageDown) }
     @objc func plus (_ sender: AnyObject) { clickAndSend([UInt8 (ascii: "+")]) }
@@ -60,6 +62,10 @@ class KeyboardView: UIView {
     var views: [UIView] = []
     
     func buildUI () {
+        guard let terminalView else {
+            return
+        }
+        
         for x in views {
             x.removeFromSuperview()
         }
@@ -67,8 +73,8 @@ class KeyboardView: UIView {
         let bottomPad = 20.0
         let slotWidth = frame.width/10
         let slotHeight = (frame.height-bottomPad)/Double (source.count)
-        let xpadding = slotWidth * 0.1
-        let ypadding = slotHeight * 0.1
+        let xpadding = min(slotWidth * 0.1, 4.0)
+        let ypadding = min(slotHeight * 0.1, 4.0)
         var x = 0.0
         var y = ypadding
         
@@ -148,7 +154,7 @@ class KeyboardView: UIView {
     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
             super.traitCollectionDidChange(previousTraitCollection)
 
-        terminalView.setupKeyboardButtonColors()
+        terminalView?.setupKeyboardButtonColors()
         buildUI()
     }
 }

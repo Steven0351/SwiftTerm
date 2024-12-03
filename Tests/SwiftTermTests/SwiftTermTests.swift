@@ -1,3 +1,4 @@
+#if os(macOS)
 import XCTest
 @testable import SwiftTerm
 
@@ -18,7 +19,14 @@ final class SwiftTermTests: XCTestCase {
     var termConfig = "--expected-terminal xterm --xterm-checksum=334"
     var logfile = NSTemporaryDirectory() + "log"
     
-    func runTester (_ includeRegexp: String) -> String?
+    func python27Bin() -> String? {
+        guard let python27 = getenv("PYTHON_BIN") else {
+            return "/Users/miguel/bin/python2.7"
+        }
+        return String(validatingUTF8: python27)
+    }
+    
+    func runTester(_ includeRegexp: String) -> String?
     {
         let psem = DispatchSemaphore(value: 0)
         
@@ -26,7 +34,7 @@ final class SwiftTermTests: XCTestCase {
             Thread.sleep(forTimeInterval: 1)
             psem.signal ()
         }
-        let python27 = "/Users/miguel/bin/python2.7"
+        let python27 = python27Bin()!
         var args: [String] = ["--expected-terminal", "xterm", "--xterm-checksum=334", "--logfile", logfile]
         args += ["--include=\(includeRegexp)"]
         
@@ -224,7 +232,8 @@ final class SwiftTermTests: XCTestCase {
             "RIS_RemoveMargins",
             "RIS_ResetDECOM",
             "RIS_ResetTabs",
-            "RIS_ResetTitleMode",
+            // "RIS_ResetTitleMode",  -- This was disabled, as it poses a security hole, see:
+            // https://github.com/migueldeicaza/SwiftTerm/security/advisories/GHSA-jq43-q8mx-r7mq
             "RIS_ExitAltScreen",
                 // Expected: this is because this assumes that if we are at 132 columns a reset (RIS) should
                 // switch to 80 and that is just not the case for this terminal emultaor.
@@ -298,3 +307,4 @@ final class SwiftTermTests: XCTestCase {
         //("testMarkerMissing", testFailuresOnHeadless),
     ]
 }
+#endif

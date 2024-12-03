@@ -4,7 +4,7 @@
 //
 //  Created by Miguel de Icaza on 4/29/21.
 //
-
+#if os(macOS)
 import Foundation
 import XCTest
 import Foundation
@@ -60,7 +60,15 @@ final class FuzzerTests: XCTestCase {
     
     func testCrashes ()
     {
-        return 
+        // This is because I do not include the crashes on github
+        // I need to put them somewhere
+        return
+        test ("timeout-cba40aaea6bc68c8dfb3672bc433337e07f792a2")
+        test ("timeout-041483b16f77af768280b38a3b80a718bfd56c2b")
+        test ("timeout-046c83ffd57883a21160651a6c765def56fc4b90")
+        test ("slow-unit-3956bd3929f8b05f523b9780c3b48e8175550302")
+        test ("slow-unit-99b162e9e3ea46e7c9c5d601ef1f5b232becce49")
+        test ("crash-80a2f29e6efcd55477f3275434cf45f241777573")
         test ("crash-661c9f1d29d682c0d7fd640fa57266b24c9a8ed2")
         test ("crash-a455aeceaf7374464ee888fbf85691ef91ab6480")
         test ("crash-a58b5a38135bd7ffadad8b420ab8dcd0c3e4a1bd")
@@ -117,3 +125,4 @@ final class FuzzerTests: XCTestCase {
         ("testFuzzerTimeouts", testTimeouts)
     ]
 }
+#endif
