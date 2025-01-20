@@ -5,12 +5,12 @@
 //
 //  Created by Miguel de Icaza on 4/21/20.
 //
-#if os(macOS) || os(iOS)
+#if os(macOS) || os(iOS) || os(visionOS)
 import Foundation
 import CoreGraphics
 import CoreText
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 import UIKit
 typealias TTColor = UIColor
 typealias TTFont = UIFont
@@ -60,8 +60,14 @@ extension TerminalView {
     
     func updateCaretView ()
     {
+        guard let caretView else { return }
         caretView.frame.size = CGSize(width: cellDimension.width, height: cellDimension.height)
         caretView.updateCursorStyle()
+    }
+    
+    /// The frame used by the caretView
+    public var caretFrame: CGRect {
+        return caretView?.frame ?? CGRect.zero
     }
     
     func setupOptions(width: CGFloat, height: CGFloat)
@@ -87,8 +93,9 @@ extension TerminalView {
         
         // Install carret view
         if caretView == nil {
-            caretView = CaretView(frame: CGRect(origin: .zero, size: CGSize(width: cellDimension.width, height: cellDimension.height)), cursorStyle: terminal.options.cursorStyle)
-            addSubview(caretView)
+            let v = CaretView(frame: CGRect(origin: .zero, size: CGSize(width: cellDimension.width, height: cellDimension.height)), cursorStyle: terminal.options.cursorStyle, terminal: self)
+            addSubview(v)
+            caretView = v
         } else {
             updateCaretView ()
         }
@@ -124,6 +131,8 @@ extension TerminalView {
             search.invalidate ()
             
             terminalDelegate?.sizeChanged (source: self, newCols: newCols, newRows: newRows)
+           
+            updateScroller()
             return true
         }
         return false
@@ -137,15 +146,27 @@ extension TerminalView {
         let lineLeading = CTFontGetLeading (fontSet.normal)
         let cellHeight = ceil(lineAscent + lineDescent + lineLeading)
         #if os(macOS)
-        let cellWidth = fontSet.normal.maximumAdvancement.width
+        // The following is a more robust way of getting the largest ascii character width, but comes with a performance hit.
+        // See: https://github.com/migueldeicaza/SwiftTerm/issues/286
+        // var sizes = UnsafeMutablePointer<NSSize>.allocate(capacity: 95)
+        // let ctFont = (font as CTFont)
+        // var glyphs = (32..<127).map { CTFontGetGlyphWithName(ctFont, String(Unicode.Scalar($0)) as CFString) }
+        // withUnsafePointer(to: glyphs[0]) { glyphsPtr in
+        //     fontSet.normal.getAdvancements(NSSizeArray(sizes), forCGGlyphs: glyphsPtr, count: 95)
+        // }
+        // let cellWidth = (0..<95).reduce(into: 0) { partialResult, idx in
+        //     partialResult = max(partialResult, sizes[idx].width)
+        // }
+        let glyph = fontSet.normal.glyph(withName: "W")
+        let cellWidth = fontSet.normal.advancement(forGlyph: glyph).width
         #else
         let fontAttributes = [NSAttributedString.Key.font: fontSet.normal]
         let cellWidth = "W".size(withAttributes: fontAttributes).width
         #endif
-        return CellDimension(width: cellWidth, height: cellHeight)
+        return CellDimension(width: max (1, cellWidth), height: max (min (cellHeight, 8192), 1))
     }
     
-    func mapColor (color: Attribute.Color, isFg: Bool, isBold: Bool) -> TTColor
+    func mapColor (color: Attribute.Color, isFg: Bool, isBold: Bool, useBrightColors: Bool = true) -> TTColor
     {
         switch color {
         case .defaultColor:
@@ -161,7 +182,14 @@ extension TerminalView {
                 return nativeBackgroundColor.inverseColor()
             }
         case .ansi256(let ansi):
-            let midx = Int (ansi) + ((isBold && ansi < 248) ? 8: 0);
+            var midx: Int
+            // if high - bright colors are enabled we will represent bold text by using more intense colors
+            // otherwise we will reduce colors but use bold fonts
+            if useBrightColors {
+                midx = ansi < 7 ? (Int (ansi) + (isBold ? 8 : 0)) : Int (ansi)
+            } else {
+                midx = ansi > 7 ? (Int (ansi) - 8) : Int(ansi)
+            }
             if let c = colors [midx] {
                 return c
             }
@@ -233,14 +261,63 @@ extension TerminalView {
         colorsChanged()
     }
     
-    public func setCursorColor(source: Terminal, color: Color?) {
+    /// Sets the color for the cursor block, and the text when it is under that cursor in block mode
+    public func setCursorColor(source: Terminal, color: Color?, textColor: Color?) {
         if let setColor = color {
             caretColor = TTColor.make (color: setColor)
         } else {
-            caretColor = caretView.defaultCaretColor
+            if let caretView {
+                caretColor = caretView.defaultCaretColor
+            }
+        }
+        if let setColor = textColor {
+            caretTextColor = TTColor.make (color: setColor)
+        } else {
+            if let caretView {
+                caretTextColor = caretView.defaultCaretTextColor
+            }
         }
     }
     
+    func getAttributedValue (_ attribute: Attribute, usingFg: TTColor, andBg: TTColor) -> [NSAttributedString.Key:Any]?
+    {
+        let flags = attribute.style
+        var bg = andBg
+        var fg = usingFg
+        
+        if flags.contains (.inverse) {
+            swap (&bg, &fg)
+        }
+        
+        var tf: TTFont
+        let isBold = flags.contains(.bold)
+        if isBold {
+            if flags.contains (.italic) {
+                tf = fontSet.boldItalic
+            } else {
+                tf = fontSet.bold
+            }
+        } else if flags.contains (.italic) {
+            tf = fontSet.italic
+        } else {
+            tf = fontSet.normal
+        }
+        
+        var nsattr: [NSAttributedString.Key:Any] = [
+            .font: tf,
+            .foregroundColor: fg,
+            .backgroundColor: bg
+        ]
+        if flags.contains (.underline) {
+            nsattr [.underlineColor] = fg
+            nsattr [.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
+        if flags.contains (.crossedOut) {
+            nsattr [.strikethroughColor] = fg
+            nsattr [.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+        }
+        return nsattr
+    }
     
     //
     // Given a vt100 attribute, return the NSAttributedString attributes used to render it
@@ -266,9 +343,15 @@ extension TerminalView {
             return result
         }
         
+        var useBoldForBrightColor: Bool = false
+        // if high - bright colors are disabled in settings we will use bold font instead
+        if case .ansi256(let code) = fg, code > 7, !useBrightColors {
+            useBoldForBrightColor = true
+        }
         var tf: TTFont
         let isBold = flags.contains(.bold)
-        if isBold {
+        
+        if isBold || useBoldForBrightColor {
             if flags.contains (.italic) {
                 tf = fontSet.boldItalic
             } else {
@@ -280,7 +363,7 @@ extension TerminalView {
             tf = fontSet.normal
         }
         
-        let fgColor = mapColor (color: fg, isFg: true, isBold: isBold)
+        let fgColor = mapColor (color: fg, isFg: true, isBold: isBold, useBrightColors: useBrightColors)
         var nsattr: [NSAttributedString.Key:Any] = [
             .font: tf,
             .foregroundColor: fgColor,
@@ -294,6 +377,7 @@ extension TerminalView {
             nsattr [.strikethroughColor] = fgColor
             nsattr [.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
+
         if withUrl {
             nsattr [.underlineStyle] = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDash.rawValue
             nsattr [.underlineColor] = fgColor
@@ -479,26 +563,27 @@ extension TerminalView {
 
     
     // TODO: this should not render any lines outside the dirtyRect
-    func drawTerminalContents (dirtyRect: TTRect, context: CGContext, offset: CGFloat, bufferOffset: Int)
+    func drawTerminalContents (dirtyRect: TTRect, context: CGContext, bufferOffset: Int)
     {
         let lineDescent = CTFontGetDescent(fontSet.normal)
         let lineLeading = CTFontGetLeading(fontSet.normal)
+        let yOffset = ceil(lineDescent+lineLeading)
 
         func calcLineOffset (forRow: Int) -> CGFloat {
-            cellDimension.height * CGFloat (forRow-bufferOffset+1) + offset
+            cellDimension.height * CGFloat (forRow-bufferOffset+1)
         }
-        
         // draw lines
-
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         // On iOS, we are drawing the exposed region
         let cellHeight = cellDimension.height
         let firstRow = Int (dirtyRect.minY/cellHeight)
         let lastRow = Int(dirtyRect.maxY/cellHeight)
         #else
         // On Mac, we are drawing the terminal buffer
-        let firstRow = terminal.buffer.yDisp
-        let lastRow = terminal.rows + terminal.buffer.yDisp
+        let cellHeight = cellDimension.height
+        let boundsMaxY = bounds.maxY
+        let firstRow = terminal.buffer.yDisp+Int ((boundsMaxY-dirtyRect.maxY)/cellHeight)
+        let lastRow = terminal.buffer.yDisp+Int((boundsMaxY-dirtyRect.minY)/cellHeight)
         #endif
 
         for row in firstRow...lastRow {
@@ -564,7 +649,7 @@ extension TerminalView {
             let line = terminal.buffer.lines [row]
             let lineInfo = buildAttributedString(row: row, line: line, cols: terminal.cols)
             let ctline = CTLineCreateWithAttributedString(lineInfo.attrStr)
-        
+
             var col = 0
             for run in CTLineGetGlyphRuns(ctline) as? [CTRun] ?? [] {
                 let runGlyphsCount = CTRunGetGlyphCount(run)
@@ -577,7 +662,7 @@ extension TerminalView {
                 }
 
                 var positions = runGlyphs.enumerated().map { (i: Int, glyph: CGGlyph) -> CGPoint in
-                    CGPoint(x: lineOrigin.x + (cellDimension.width * CGFloat(col + i)), y: lineOrigin.y + ceil(lineLeading + lineDescent))
+                    CGPoint(x: lineOrigin.x + (cellDimension.width * CGFloat(col + i)), y: lineOrigin.y + yOffset)
                 }
 
                 var backgroundColor: TTColor?
@@ -609,13 +694,13 @@ extension TerminalView {
                         origin.y -= missing
                     }
                     #endif
-                    
+
                     if col + runGlyphsCount >= terminal.cols {
                         size.width += frame.width - size.width
                     }
 
                     let rect = CGRect (origin: origin, size: size)
-                    
+
                     #if os(macOS)
                     rect.applying(transform).fill(using: .destinationOver)
                     #else
@@ -623,7 +708,7 @@ extension TerminalView {
                     #endif
                     context.restoreGState()
                 }
-                
+
                 nativeForegroundColor.set()
 
                 if runAttributes.keys.contains(.foregroundColor) {
@@ -642,6 +727,7 @@ extension TerminalView {
 
                 col += runGlyphsCount
             }
+
             // Render any sixel content last
             if let images = lineInfo.images {
                 let rowBase = frame.height - (CGFloat(row) * cellDimension.height)
@@ -658,7 +744,6 @@ extension TerminalView {
                     image.image.draw (in: rect)
                 }
             }
-            
             switch renderMode {
             case .single:
                 break
@@ -671,7 +756,28 @@ extension TerminalView {
             }
         }
         
-#if os(iOS)
+#if os(macOS)
+        // Fills gaps at the end with the default terminal background
+        let box = CGRect (x: 0, y: 0, width: bounds.width, height: bounds.height.truncatingRemainder(dividingBy: cellHeight))
+        if dirtyRect.intersects(box) {
+            nativeBackgroundColor.setFill()
+            context.fill ([box])
+        }
+#elseif false
+        // Currently the caller on iOS is clearing the entire dirty region due to the ordering of
+        // font change sizes, but once we fix that, we should remove the clearing of the dirty
+        // region in the calling code, and enable this code instead.
+        let lineOffset = calcLineOffset(forRow: lastRow)
+        let lineOrigin = CGPoint(x: 0, y: frame.height - lineOffset)
+
+        let inter = dirtyRect.intersection(CGRect (x: 0, y: lineOrigin.y, width: bounds.width, height: cellHeight))
+        if !inter.isEmpty {
+            nativeBackgroundColor.setFill()
+            context.fill ([inter])
+        }
+#endif
+        
+#if os(iOS) || os(visionOS)
         if selection.active {
             let start, end: Position
 
@@ -725,9 +831,17 @@ extension TerminalView {
     {
         updateCursorPosition()
         guard let (rowStart, rowEnd) = terminal.getUpdateRange () else {
+            if notifyUpdateChanges {
+                let buffer = terminal.buffer
+                let y = buffer.yDisp+buffer.y
+                terminalDelegate?.rangeChanged (source: self, startY: y, endY: y)
+            }
             return
         }
-        
+        if notifyUpdateChanges {
+            terminalDelegate?.rangeChanged (source: self, startY: rowStart, endY: rowEnd)
+        }
+
         terminal.clearUpdateRange ()
                 
         #if os(macOS)
@@ -745,7 +859,6 @@ extension TerminalView {
             region = CGRect (x: 0, y: 0, width: frame.width, height: oh + oy)
         }
         setNeedsDisplay(region)
-        setNeedsDisplay(bounds)
         #else
         // TODO iOS: need to update the code above, but will do that when I get some real
         // life data being fed into it.
@@ -766,6 +879,7 @@ extension TerminalView {
     
     func updateCursorPosition()
     {
+        guard let caretView else { return }
         //let lineOrigin = CGPoint(x: 0, y: frame.height - (cellDimension.height * (CGFloat(terminal.buffer.y - terminal.buffer.yDisp + 1))))
         //caretView.frame.origin = CGPoint(x: lineOrigin.x + (cellDimension.width * CGFloat(terminal.buffer.x)), y: lineOrigin.y)
         let buffer = terminal.buffer
@@ -778,7 +892,7 @@ extension TerminalView {
             addSubview(caretView)
         }
         let doublePosition = buffer.lines [vy].renderMode == .single ? 1.0 : 2.0
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         let offset = (cellDimension.height * (CGFloat(buffer.y+(buffer.yBase))))
         let lineOrigin = CGPoint(x: 0, y: offset)
         #else
@@ -786,6 +900,7 @@ extension TerminalView {
         let lineOrigin = CGPoint(x: 0, y: frame.height - offset)
         #endif
         caretView.frame.origin = CGPoint(x: lineOrigin.x + (cellDimension.width * doublePosition * CGFloat(buffer.x)), y: lineOrigin.y)
+        caretView.setText (ch: buffer.lines [vy][buffer.x])
     }
     
     // Does not use a default argument and merge, because it is called back
@@ -1146,7 +1261,7 @@ extension TerminalView {
         let rows = Int (ceil (height/cellDimension.height))
         
         let stripeSize = CGSize (width: width, height: cellDimension.height)
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         var srcY: CGFloat = 0
         #else
         var srcY: CGFloat = img.size.height
@@ -1160,7 +1275,7 @@ extension TerminalView {
             guard let stripe = drawImageInStripe (image: img, srcY: srcY, width: width, srcHeight: cellDimension.height * heightRatio, dstHeight: cellDimension.height, size: stripeSize) else {
                 continue
             }
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             srcY += cellDimension.height * heightRatio
             #endif
             

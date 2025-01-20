@@ -1,6 +1,11 @@
-.DS_Store
-/.build
-/Packages
-/*.xcodeproj
-xcuserdata/
+timeout-*
+slow-unit-*
+timeout-*
+slow-unit-*
+fuzz-*.log
+xcuserdata
+crash-*
 DerivedData
+.deriveddata
+.build
+.DS_Store

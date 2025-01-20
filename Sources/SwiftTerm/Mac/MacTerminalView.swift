@@ -26,7 +26,7 @@ import CoreGraphics
  *
  * Developers might want to surface UIs for `optionAsMetaKey` and `allowMouseReporting` in
  * their application.  They both default to true, but this means that Option-Letter is hijacked for
- * terminal purposes to send the sequence ESC-Letter, instead of the macOS specific character` and
+ * terminal purposes to send the sequence ESC-Letter, instead of the macOS specific character and
  * means that when mouse-aware applications are running, they hijack the normal selection process.
  *
  * Call the `getTerminal` method to get a reference to the underlying `Terminal` that backs this
@@ -75,6 +75,17 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
      */
     public weak var terminalDelegate: TerminalViewDelegate?
     
+    /// If true, the caret view will show different shapes depending on the focus
+    /// otherwise, it will behave like it is focused
+    public var caretViewTracksFocus: Bool {
+        get {
+            return caretView.tracksFocus
+        }
+        set {
+            caretView.tracksFocus = newValue
+        }
+    }
+
     var accessibility: AccessibilityService = AccessibilityService()
     var search: SearchService!
     var debug: TerminalDebugView?
@@ -82,7 +93,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     var cellDimension: CellDimension!
     var caretView: CaretView!
-    var terminal: Terminal!
+    public var terminal: Terminal!
 
     var selection: SelectionService!
     private var scroller: NSScroller!
@@ -150,8 +161,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if isBigSur {
             disableFullRedrawOnAnyChanges = true
         }
+        if #available(macOS 14, *) {
+            self.clipsToBounds = true
+        }
         setupScroller()
         setupOptions()
+        setupFocusNotification()
     }
     
     func startDisplayUpdates ()
@@ -162,6 +177,27 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     func suspendDisplayUpdates()
     {
         // Not used on Mac
+    }
+    
+    var becomeMainObserver, resignMainObserver: NSObjectProtocol?
+    
+    deinit {
+        if let becomeMainObserver {
+            NotificationCenter.default.removeObserver (becomeMainObserver)
+        }
+        if let resignMainObserver {
+            NotificationCenter.default.removeObserver (resignMainObserver)
+        }
+    }
+    
+    func setupFocusNotification() {
+        becomeMainObserver = NotificationCenter.default.addObserver(forName: .init("NSWindowDidBecomeMainNotification"), object: nil, queue: nil) { [unowned self] notification in
+            self.caretView.updateCursorStyle()
+        }
+        resignMainObserver = NotificationCenter.default.addObserver(forName: .init("NSWindowDidResignMainNotification"), object: nil, queue: nil) { [unowned self] notification in
+            self.caretView.disableAnimations()
+            self.caretView.updateView()
+        }
     }
     
     func setupOptions ()
@@ -207,12 +243,22 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
+    public var useBrightColors: Bool = true
+    
     /// Controls the color for the caret
     public var caretColor: NSColor {
         get { caretView.caretColor }
         set { caretView.caretColor = newValue }
     }
-    
+
+    /// Controls the color for the text in the caret when using a block cursor, if not set
+    /// the cursor will render with the foreground color
+    public var caretTextColor: NSColor? {
+        get { caretView.caretTextColor }
+        set { caretView.caretTextColor = newValue }
+    }
+
     var _selectedTextBackgroundColor = NSColor.selectedTextBackgroundColor
     /// The color used to render the selection
     public var selectedTextBackgroundColor: NSColor {
@@ -257,6 +303,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     func setupScroller()
     {
+        if scroller != nil {
+            scroller.removeFromSuperview()
+        }
+
         let style: NSScroller.Style = .legacy
         let scrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: style)
         scroller = NSScroller(frame: NSRect(x: bounds.maxX - scrollerWidth, y: 0, width: scrollerWidth, height: bounds.height))
@@ -313,7 +363,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// terminal if it has requested the data.   This poses a problem for selection, so users
     /// need a way of toggling this behavior.
     public var allowMouseReporting: Bool = true
-        
+
+    /**
+     * If set to true, this will call the TerminalViewDelegate's rangeChanged method
+     * when there are changes that are being performed on the UI
+     */
+    public var notifyUpdateChanges = false
+
     func updateDebugDisplay()
     {
         debug?.update()
@@ -353,7 +409,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         guard let currentContext = getCurrentGraphicsContext() else {
             return
         }
-        drawTerminalContents (dirtyRect: dirtyRect, context: currentContext, offset: 0, bufferOffset: terminal.buffer.yDisp)
+        drawTerminalContents (dirtyRect: dirtyRect, context: currentContext, bufferOffset: terminal.buffer.yDisp)
     }
     
     public override func cursorUpdate(with event: NSEvent)
@@ -378,7 +434,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             updateCursorPosition()
         }
     }
-    
+
+    open override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        setupScroller()
+    }
+
     public override func resizeSubviews(withOldSize oldSize: NSSize) {
         super.resizeSubviews(withOldSize: oldSize)
         updateScroller()
@@ -387,7 +448,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     private var _hasFocus = false
     open var hasFocus : Bool {
-        get { _hasFocus }
+        get {
+            //print ("hasFocus: \(_hasFocus) window=\(window?.isKeyWindow)")
+            return _hasFocus && (window?.isKeyWindow ?? true)
+        }
         set {
             _hasFocus = newValue
             caretView.focused = newValue
@@ -510,8 +574,23 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let eventFlags = event.modifierFlags
         
         // Handle Option-letter to send the ESC sequence plus the letter as expected by terminals
-        if optionAsMetaKey && eventFlags.contains (.option) {
+        if eventFlags.contains ([.option, .command]) {
+            if event.charactersIgnoringModifiers == "o" {
+                optionAsMetaKey.toggle()
+            }
+        } else if optionAsMetaKey && eventFlags.contains (.option) {
             if let rawCharacter = event.charactersIgnoringModifiers {
+                if let fs = rawCharacter.unicodeScalars.first {
+                    switch Int (fs.value) {
+                    case NSLeftArrowFunctionKey:
+                        send (EscapeSequences.emacsBack)
+                        return
+                    case NSRightArrowFunctionKey:
+                        send (EscapeSequences.emacsForward)
+                        return
+                    default: break
+                    }
+                }
                 send (EscapeSequences.cmdEsc)
                 send (txt: rawCharacter)
             }
@@ -622,7 +701,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             } else {
                 send (EscapeSequences.cmdPageDown)
             }
-            break;
+        case #selector(moveToLeftEndOfLine(_:)):
+            // Apple sends the Emacs back-word commands
+            send (EscapeSequences.emacsBack)
+        case #selector(moveToRightEndOfLine(_:)):
+            send (EscapeSequences.emacsForward)
         default:
             print ("Unhandle selector \(selector)")
         }
@@ -1133,6 +1216,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         return nil
     }
     
+    public func iTermContent (source: Terminal, content: ArraySlice<UInt8>) {
+        terminalDelegate?.iTermContent(source: self, content: content)
+    }
 }
 
 
@@ -1153,6 +1239,9 @@ extension TerminalViewDelegate {
     public func bell (source: TerminalView)
     {
         NSSound.beep()
+    }
+    
+    public func iTermContent (source: TerminalView, content: ArraySlice<UInt8>) {
     }
 }
 #endif
